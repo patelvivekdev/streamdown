@@ -133,7 +133,9 @@ let run = 0;
 const fresh = ({ code, language }: Sample) => {
   run += 1;
   const marker = language === "python" ? "#" : "//";
-  return language === "json" ? code : `${marker} run ${run}\n${code}`;
+  return language === "json"
+    ? code.replace('"id": 0', `"id": ${run}`)
+    : `${marker} run ${run}\n${code}`;
 };
 
 // Streams the text in steps like a code fence that is still open, then
