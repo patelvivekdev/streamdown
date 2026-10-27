@@ -2,7 +2,7 @@ import { defineConfig } from "tsup";
 
 export default defineConfig({
   dts: true,
-  entry: ["index.ts"],
+  entry: ["index.ts", "highlights.ts"],
   format: ["esm"],
   minify: true,
   outDir: "dist",
