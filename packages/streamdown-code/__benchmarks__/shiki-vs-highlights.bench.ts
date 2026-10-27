@@ -37,11 +37,12 @@ const repeat = (unit: string, units: number) =>
     "\n\n"
   );
 
-const MINIFIED = Array.from(
-  { length: 200 },
-  (_, i) =>
-    `function a${i}(b,c){return b.map(d=>d*c+${i}).filter(Boolean)}var x${i}={k:"v${i}",n:${i},r:/[a-z]+${i}/g};`
-).join("");
+const minified = (units: number) =>
+  Array.from(
+    { length: units },
+    (_, i) =>
+      `function a${i}(b,c){return b.map(d=>d*c+${i}).filter(Boolean)}var x${i}={k:"v${i}",n:${i},r:/[a-z]+${i}/g};`
+  ).join("");
 
 interface Sample {
   code: string;
@@ -74,7 +75,18 @@ const HUGE_JSON = sample(
     2
   )
 );
-const MINIFIED_JS = sample("minified js, one line", "javascript", MINIFIED);
+const MINIFIED_JS = sample(
+  "minified js, one line",
+  "javascript",
+  minified(200)
+);
+// Shiki re-tokenizes a growing single line in full on every update, which
+// takes minutes per run for the larger sample.
+const SMALL_MINIFIED_JS = sample(
+  "minified js, one line",
+  "javascript",
+  minified(50)
+);
 
 const plugins: Record<string, CodeHighlighterPlugin> = {
   "shiki (incremental, current)": createCodePlugin({ themes: THEMES }),
@@ -98,11 +110,17 @@ const shikiFull = async (code: string, language: string) =>
 const highlightWith = (
   plugin: CodeHighlighterPlugin,
   code: string,
-  language: string
+  language: string,
+  isIncomplete = false
 ) =>
   new Promise<HighlightResult>((resolve) => {
     const result = plugin.highlight(
-      { code, language: language as BundledLanguage, themes: THEMES },
+      {
+        code,
+        isIncomplete,
+        language: language as BundledLanguage,
+        themes: THEMES,
+      },
       resolve
     );
     if (result) {
@@ -118,15 +136,23 @@ const fresh = ({ code, language }: Sample) => {
   return language === "json" ? code : `${marker} run ${run}\n${code}`;
 };
 
+// Streams the text in steps like a code fence that is still open, then
+// highlights it once more as the closed fence.
 const streamWith = async (
-  highlight: (code: string) => Promise<unknown> | unknown,
+  highlight: (code: string, isIncomplete: boolean) => unknown,
   text: string,
   step: number
 ) => {
-  for (let end = step; end < text.length + step; end += step) {
-    await highlight(text.slice(0, end));
+  for (let end = step; end < text.length; end += step) {
+    await highlight(text.slice(0, end), true);
   }
+  await highlight(text, false);
 };
+
+// Runs that take seconds would otherwise repeat for minutes.
+const SLOW_RUN = { iterations: 3, time: 0, warmupIterations: 1 };
+const runOptions = (item: Sample) =>
+  item.code.length > 8000 || !item.code.includes("\n") ? SLOW_RUN : undefined;
 
 const complete = [LARGE_TS, HUGE_TS, LARGE_PY, HUGE_JSON, MINIFIED_JS];
 const streamed: [Sample, number][] = [
@@ -136,7 +162,7 @@ const streamed: [Sample, number][] = [
   [LARGE_PY, 24],
   [HUGE_TS, 64],
   [HUGE_JSON, 64],
-  [MINIFIED_JS, 64],
+  [SMALL_MINIFIED_JS, 64],
 ];
 
 test("shiki vs highlights", async ({ bench }) => {
@@ -150,7 +176,7 @@ test("shiki vs highlights", async ({ bench }) => {
     for (const [name, plugin] of Object.entries(plugins)) {
       await bench(`complete ${item.name}: ${name}`, () =>
         highlightWith(plugin, fresh(item), item.language)
-      ).run();
+      ).run(runOptions(item));
     }
   }
 
@@ -158,11 +184,12 @@ test("shiki vs highlights", async ({ bench }) => {
     for (const [name, plugin] of Object.entries(plugins)) {
       await bench(`stream ${item.name} in ${step}-char steps: ${name}`, () =>
         streamWith(
-          (code) => highlightWith(plugin, code, item.language),
+          (code, isIncomplete) =>
+            highlightWith(plugin, code, item.language, isIncomplete),
           fresh(item),
           step
         )
-      ).run();
+      ).run(runOptions(item));
     }
     // Full re-tokenization of the larger samples takes minutes per run.
     if (item.code.length < 8000) {
@@ -174,7 +201,7 @@ test("shiki vs highlights", async ({ bench }) => {
             fresh(item),
             step
           )
-      ).run();
+      ).run(SLOW_RUN);
     }
   }
 }, 3_600_000);

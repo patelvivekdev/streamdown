@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import githubDarkDefault from "@pierre/highlights/themes/github-dark-default";
 import type { BundledLanguage } from "shiki";
 import { describe, expect, it } from "vitest";
@@ -86,5 +87,70 @@ describe("createHighlightsCodePlugin", () => {
       themes: THEMES,
     };
     expect(plugin.highlight(options)).not.toBe(plugin.highlight(options));
+  });
+});
+
+describe("createHighlightsCodePlugin while streaming", () => {
+  const stream = (code: string, language: string) =>
+    createHighlightsCodePlugin().highlight({
+      code,
+      isIncomplete: true,
+      language: language as BundledLanguage,
+      themes: THEMES,
+    });
+
+  // Lengths of the prefixes whose streamed tokens differ from a full highlight
+  const mismatchedSteps = (code: string, language: string) => {
+    const mismatched: number[] = [];
+    for (let end = 0; end <= code.length; end += 1) {
+      const partial = code.slice(0, end);
+      if (
+        !isDeepStrictEqual(
+          stream(partial, language)?.tokens,
+          highlight(partial, language).tokens
+        )
+      ) {
+        mismatched.push(end);
+      }
+    }
+    return mismatched;
+  };
+
+  it("matches a full highlight across multi-line constructs", () => {
+    const code = `const s = \`a\n\${b}\n\`;\n/* c\n * d */\nlet e = "f"; // g\n\nfunction h() {\n  return 1;\n}\n`;
+    expect(mismatchedSteps(code, "typescript")).toEqual([]);
+  });
+
+  it("matches a full highlight with CRLF line breaks and emoji", () => {
+    const code =
+      'def f(x):\r\n    """doc 🎉\r\n    more"""\r\n    return x  # é\r\n';
+    expect(mismatchedSteps(code, "python")).toEqual([]);
+  });
+
+  it("keeps blocks that stream at the same time apart", () => {
+    const a = "const a = 1;\nconst b = `x\ny`;\n";
+    const b = "let c = 2;\n/* d\ne */ let f;\n";
+    for (let end = 0; end <= Math.max(a.length, b.length); end += 1) {
+      expect(stream(a.slice(0, end), "typescript")?.tokens).toEqual(
+        highlight(a.slice(0, end), "typescript").tokens
+      );
+      expect(stream(b.slice(0, end), "typescript")?.tokens).toEqual(
+        highlight(b.slice(0, end), "typescript").tokens
+      );
+    }
+  });
+
+  it("starts over when the code does not extend the previous update", () => {
+    stream("const a = `x\n", "typescript");
+    expect(stream("const b = 1;\n", "typescript")?.tokens).toEqual(
+      highlight("const b = 1;\n", "typescript").tokens
+    );
+  });
+
+  it("does not change results it returned earlier", () => {
+    const first = stream("let a = 1;\nlet b", "typescript");
+    const snapshot = structuredClone(first?.tokens);
+    stream("let a = 1;\nlet b = `\n", "typescript");
+    expect(first?.tokens).toEqual(snapshot);
   });
 });
